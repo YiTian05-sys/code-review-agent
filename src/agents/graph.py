@@ -2,6 +2,7 @@ import os
 import sqlite3
 from typing import TypedDict
 from dotenv import load_dotenv
+from anthropic import Anthropic
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from src.agents.analyzer import analyze_code
@@ -13,6 +14,7 @@ class ReviewState(TypedDict):
     code: str
     context: str
     analysis: dict
+    fixed_code: str
     final_report: str
 
 def retriever_node(state: ReviewState) -> ReviewState:
@@ -29,6 +31,34 @@ def analyzer_node(state: ReviewState) -> ReviewState:
     print("🔬 Analyzer: 正在分析代码...")
     analysis = analyze_code(state["code"], state["context"])
     return {**state, "analysis": analysis}
+
+def fixer_node(state: ReviewState) -> ReviewState:
+    print("🔧 Fixer: 正在生成修复代码...")
+    a = state["analysis"]
+    issues = "\n".join([
+        *[f"Bug: {b}" for b in a.get("bugs", [])],
+        *[f"安全: {s}" for s in a.get("security", [])],
+        *[f"性能: {p}" for p in a.get("performance", [])],
+        *[f"风格: {s}" for s in a.get("style", [])],
+    ])
+    prompt = f"""你是一个专业的代码修复专家。请根据以下发现的问题，修复原始代码。
+
+发现的问题：
+{issues}
+
+原始代码：
+{state["code"]}
+
+请直接返回修复后的完整代码，不要任何解释、注释说明或markdown代码块标记。"""
+
+    client = Anthropic()
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    fixed_code = message.content[0].text.strip()
+    return {**state, "fixed_code": fixed_code}
 
 def reviewer_node(state: ReviewState) -> ReviewState:
     print("📝 Reviewer: 正在生成报告...")
@@ -49,6 +79,9 @@ def reviewer_node(state: ReviewState) -> ReviewState:
 {chr(10).join(f'  - {s}' for s in a.get('style', []))}
 
 📊 综合评分: {a.get('score', 0)}/100
+
+🔧 修复后代码:
+{state.get('fixed_code', '（无修复代码）')}
 """
     return {**state, "final_report": report}
 
@@ -59,9 +92,11 @@ def build_graph():
     graph = StateGraph(ReviewState)
     graph.add_node("retriever", retriever_node)
     graph.add_node("analyzer", analyzer_node)
+    graph.add_node("fixer", fixer_node)
     graph.add_node("reviewer", reviewer_node)
     graph.set_entry_point("retriever")
     graph.add_edge("retriever", "analyzer")
-    graph.add_edge("analyzer", "reviewer")
+    graph.add_edge("analyzer", "fixer")
+    graph.add_edge("fixer", "reviewer")
     graph.add_edge("reviewer", END)
     return graph.compile(checkpointer=checkpointer)
