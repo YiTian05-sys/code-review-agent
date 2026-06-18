@@ -1,7 +1,9 @@
 import os
-from typing import TypedDict, Annotated
+import sqlite3
+from typing import TypedDict
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.sqlite import SqliteSaver
 from src.agents.analyzer import analyze_code
 from src.rag.indexer import index_code_files
 
@@ -51,6 +53,9 @@ def reviewer_node(state: ReviewState) -> ReviewState:
     return {**state, "final_report": report}
 
 def build_graph():
+    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+
     graph = StateGraph(ReviewState)
     graph.add_node("retriever", retriever_node)
     graph.add_node("analyzer", analyzer_node)
@@ -59,4 +64,4 @@ def build_graph():
     graph.add_edge("retriever", "analyzer")
     graph.add_edge("analyzer", "reviewer")
     graph.add_edge("reviewer", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
