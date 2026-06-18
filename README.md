@@ -57,7 +57,7 @@
 ### 安装
 
 ```bash
-git clone https://github.com/ytia0058/code-review-agent.git
+git clone https://github.com/YiTian05-sys/code-review-agent.git
 cd code-review-agent
 python -m venv venv
 venv\Scripts\activate
